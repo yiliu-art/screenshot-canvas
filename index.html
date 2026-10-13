@@ -43,6 +43,8 @@ body.view .item{cursor:zoom-in}
 body.arrange .item{cursor:move}
 .item.selected{outline:calc(2px / var(--s)) solid var(--accent);outline-offset:calc(2px / var(--s))}
 .item.dragging{box-shadow:0 10px 40px rgba(0,0,0,.18)}
+.item{transition:scale .18s cubic-bezier(.2,.8,.2,1)}
+.item.lifted{scale:1.04;box-shadow:0 18px 50px rgba(0,0,0,.24);outline:calc(2px / var(--s)) solid var(--accent)}
 
 .item .del,.item .rz{position:absolute;display:none;transform:scale(calc(1 / var(--s)))}
 body.arrange .item:hover .del, body.arrange .item.selected .del,
@@ -175,7 +177,7 @@ body.arrange .item:hover .rz, body.arrange .item.selected .rz{display:block}
   </div>
 </div>
 
-<div id="bottom">Drag to pan · Pinch or ⌘ + scroll to zoom · Drop or paste images to add · <b>E</b> to arrange</div>
+<div id="bottom">Drag to pan · Hold a screenshot to move it · ⌘ + scroll to zoom · Drop or paste images to add</div>
 
 <div id="empty"><div class="card">
   <h1>Your screenshots, all in one place</h1>
@@ -728,11 +730,29 @@ viewport.addEventListener('pointerdown', e => {
   startPan(e, it);
 });
 
+const LONG_PRESS_MS = 450;
 function startPan(e, it) {
-  gesture = { type: 'pan', lx: e.clientX, ly: e.clientY, sx: e.clientX, sy: e.clientY, it, moved: false, samples: [] };
+  const g = gesture = { type: 'pan', lx: e.clientX, ly: e.clientY, sx: e.clientX, sy: e.clientY, it, moved: false, samples: [] };
   viewport.classList.add('panning');
+  if (it && !spaceDown) g.lpTimer = setTimeout(() => liftItem(g), LONG_PRESS_MS);
 }
+// Long-press on a screenshot picks it up: the pan turns into a move of that screenshot
+function liftItem(g) {
+  if (gesture !== g || pointers.size !== 1 || !items.has(g.it.id)) return;
+  stopInertia();
+  const it = g.it;
+  if (!selected.has(it.id)) select([it.id]);
+  const moving = mode === 'arrange' ? [...selected].map(id => items.get(id)) : [it];
+  bringToFront(moving);
+  moving.forEach(m => m.el.classList.add('dragging', 'lifted'));
+  viewport.classList.remove('panning');
+  gesture = { type: 'move', sx: g.lx, sy: g.ly, moved: true, lifted: true, it,
+    orig: moving.map(m => ({ it: m, x: m.x, y: m.y })) };
+  try { navigator.vibrate && navigator.vibrate(12); } catch {}
+}
+function cancelLongPress() { if (gesture && gesture.lpTimer) { clearTimeout(gesture.lpTimer); gesture.lpTimer = 0; } }
 function startPinch() {
+  cancelLongPress();
   const [a, b] = [...pointers.values()];
   gesture = { type: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
 }
@@ -751,7 +771,9 @@ viewport.addEventListener('pointermove', e => {
   } else if (g.type === 'pan') {
     const dx = e.clientX - g.lx, dy = e.clientY - g.ly;
     g.lx = e.clientX; g.ly = e.clientY;
-    if (Math.hypot(e.clientX - g.sx, e.clientY - g.sy) > 4) g.moved = true;
+    const dist = Math.hypot(e.clientX - g.sx, e.clientY - g.sy);
+    if (dist > 4) g.moved = true;
+    if (dist > 10) cancelLongPress();
     view.x += dx; view.y += dy; applyView();
     const now = performance.now();
     g.samples.push({ t: now, x: e.clientX, y: e.clientY });
@@ -781,6 +803,7 @@ viewport.addEventListener('pointermove', e => {
 
 function endPointer(e) {
   pointers.delete(e.pointerId);
+  cancelLongPress();
   if (!gesture) return;
   const g = gesture;
   if (g.type === 'pinch') { if (pointers.size === 0) gesture = null; else if (pointers.size === 1) gesture = { type: 'none' }; return; }
@@ -800,8 +823,9 @@ function endPointer(e) {
       if (performance.now() - b.t < 60) runInertia();
     }
   } else if (g.type === 'move') {
-    g.orig.forEach(o => o.it.el.classList.remove('dragging'));
+    g.orig.forEach(o => o.it.el.classList.remove('dragging', 'lifted'));
     if (g.moved) saveItems(g.orig.map(o => o.it));
+    if (g.lifted && mode === 'view') { selected.clear(); syncSelection(); }
   } else if (g.type === 'resize') {
     saveItems([g.it]);
   } else if (g.type === 'marquee') {
@@ -809,6 +833,7 @@ function endPointer(e) {
   }
 }
 viewport.addEventListener('pointerup', endPointer);
+viewport.addEventListener('contextmenu', e => e.preventDefault()); // long-press shouldn't open a menu
 viewport.addEventListener('pointercancel', endPointer);
 viewport.addEventListener('dblclick', e => {
   const el = e.target.closest('.item');
@@ -1046,7 +1071,7 @@ async function takeNativeShares() {
 }
 
 if (matchMedia('(pointer:coarse)').matches) {
-  $('empty').querySelector('p').textContent = 'Tap Upload to pick screenshots from your photos. Then drag around to look through everything — pinch to zoom.';
+  $('empty').querySelector('p').textContent = 'Tap Upload to pick screenshots from your photos. Drag to look around, pinch to zoom, and press and hold a screenshot to move it.';
 }
 
 function takeInbox() {
