@@ -1,0 +1,9 @@
+{
+  "appId": "art.yiliu.screenshotcanvas",
+  "appName": "Screenshots",
+  "webDir": "www",
+  "backgroundColor": "#fbfbf9",
+  "plugins": {
+    "SystemBars": { "style": "LIGHT", "insetsHandling": "css" }
+  }
+}
