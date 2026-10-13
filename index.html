@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Screenshot Canvas</title>
+<meta name="theme-color" content="#fbfbf9">
+<meta name="description" content="All your screenshots on one infinite canvas.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Screenshots">
+<style>
+:root{
+  --bg:#fbfbf9; --ink:#151515; --muted:#8c8c86; --line:#e6e6e1;
+  --panel:rgba(255,255,255,.88); --tile:#efefeb;
+  --accent:#2f5bff; --danger:#e5484d;
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 6px 22px rgba(0,0,0,.07);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+  font:13px/1.4 -apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;
+  -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;overscroll-behavior:none}
+:root{--st:env(safe-area-inset-top,0px);--sb:env(safe-area-inset-bottom,0px);--sl:env(safe-area-inset-left,0px);--sr:env(safe-area-inset-right,0px)}
+button{font:inherit;color:inherit;cursor:pointer}
+
+/* ---------- canvas ---------- */
+#viewport{position:fixed;inset:0;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+#viewport.panning{cursor:grabbing}
+body.space #viewport, body.space .item{cursor:grab !important}
+#world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;--s:1}
+#world.animate .item{transition:transform .55s cubic-bezier(.2,.8,.2,1),width .55s cubic-bezier(.2,.8,.2,1),height .55s cubic-bezier(.2,.8,.2,1)}
+
+.item{position:absolute;left:0;top:0;background:var(--tile);box-shadow:var(--shadow)}
+.item img{width:100%;height:100%;display:block;pointer-events:none;-webkit-user-drag:none;opacity:0;transition:opacity .35s}
+.item img.loaded{opacity:1}
+body.view .item{cursor:zoom-in}
+body.arrange .item{cursor:move}
+.item.selected{outline:calc(2px / var(--s)) solid var(--accent);outline-offset:calc(2px / var(--s))}
+.item.dragging{box-shadow:0 10px 40px rgba(0,0,0,.18)}
+
+.item .del,.item .rz{position:absolute;display:none;transform:scale(calc(1 / var(--s)))}
+body.arrange .item:hover .del, body.arrange .item.selected .del,
+body.arrange .item:hover .rz, body.arrange .item.selected .rz{display:block}
+.item .del{top:-11px;right:-11px;transform-origin:100% 0;width:24px;height:24px;border-radius:50%;border:0;
+  background:var(--ink);color:#fff;font-size:15px;line-height:24px;padding:0;box-shadow:0 2px 6px rgba(0,0,0,.25)}
+.item .del:hover{background:var(--danger)}
+.item .rz{right:-7px;bottom:-7px;transform-origin:100% 100%;width:14px;height:14px;border-radius:3px;
+  background:#fff;border:2px solid var(--accent);cursor:nwse-resize}
+
+#marquee{position:fixed;border:1px solid var(--accent);background:rgba(47,91,255,.08);pointer-events:none;display:none;z-index:5}
+
+/* ---------- chrome ---------- */
+.bar{position:fixed;z-index:10;display:flex;align-items:center;gap:6px}
+#top-left{top:calc(16px + var(--st));left:calc(16px + var(--sl));gap:10px}
+#top-right{top:calc(16px + var(--st));right:calc(16px + var(--sr))}
+#bottom{bottom:calc(16px + var(--sb));left:50%;transform:translateX(-50%);color:var(--muted);font-size:12px;white-space:nowrap;
+  background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);padding:6px 12px;border-radius:999px;border:1px solid var(--line)}
+.brand{font-weight:600;font-size:14px;letter-spacing:-.01em}
+.count{color:var(--muted)}
+.group{display:flex;align-items:center;background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border:1px solid var(--line);border-radius:10px;padding:3px;gap:2px}
+.btn{border:0;background:transparent;border-radius:7px;height:30px;padding:0 10px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{background:rgba(0,0,0,.05)}
+.btn.icon{width:30px;padding:0;justify-content:center}
+.btn.primary{background:var(--ink);color:#fff}
+.btn.primary:hover{background:#333}
+.btn.on{background:var(--ink);color:#fff}
+.btn svg{width:16px;height:16px;flex:none}
+#zoom-label{min-width:48px;text-align:center;font-variant-numeric:tabular-nums;color:var(--muted)}
+
+/* ---------- empty / drop ---------- */
+#empty{position:fixed;inset:0;display:none;align-items:center;justify-content:center;pointer-events:none;z-index:2}
+#empty.show{display:flex}
+#empty .card{text-align:center;pointer-events:auto;max-width:340px;padding:0 16px}
+#empty h1{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0 0 6px}
+#empty p{color:var(--muted);margin:0 0 18px}
+#drop{position:fixed;inset:10px;border:2px dashed var(--accent);border-radius:16px;background:rgba(47,91,255,.05);
+  z-index:30;display:none;align-items:center;justify-content:center;pointer-events:none;font-weight:500;color:var(--accent);font-size:15px}
+#drop.show{display:flex}
+
+/* ---------- toast ---------- */
+#toast{position:fixed;left:50%;bottom:60px;transform:translate(-50%,20px);opacity:0;transition:.25s;z-index:40;
+  background:var(--ink);color:#fff;border-radius:10px;padding:8px 8px 8px 14px;display:flex;align-items:center;gap:10px;pointer-events:none;white-space:nowrap}
+#toast.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+#toast button{background:rgba(255,255,255,.14);border:0;color:#fff;border-radius:6px;padding:4px 10px}
+#toast button:empty{display:none}
+
+/* ---------- lightbox ---------- */
+#lightbox{position:fixed;inset:0;z-index:50;background:rgba(251,251,249,.97);display:none;flex-direction:column}
+#lightbox.show{display:flex}
+#lb-stage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:64px 72px 12px}
+#lb-img{max-width:100%;max-height:100%;object-fit:contain;box-shadow:var(--shadow);background:var(--tile)}
+#lb-meta{display:flex;justify-content:center;gap:14px;color:var(--muted);padding:6px 16px 20px;font-size:12px;flex-wrap:wrap}
+#lb-meta b{color:var(--ink);font-weight:500;max-width:50vw;overflow:hidden;text-overflow:ellipsis}
+.lb-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;border:1px solid var(--line);
+  background:var(--panel);display:flex;align-items:center;justify-content:center}
+.lb-nav:hover{background:#fff}
+#lb-prev{left:16px}#lb-next{right:16px}
+#lb-top{position:absolute;top:16px;right:16px;display:flex;gap:6px}
+#lb-top-left{position:absolute;top:22px;left:20px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+#progress{position:fixed;top:60px;right:16px;z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:8px 12px;display:none;font-size:12px;color:var(--muted)}
+#progress.show{display:block}
+
+#lb-top{top:calc(16px + var(--st))}
+#lb-top-left{top:calc(22px + var(--st))}
+#lb-meta{padding-bottom:calc(20px + var(--sb))}
+#progress{top:calc(60px + var(--st))}
+
+@media (max-width:640px){
+  .hide-sm{display:none !important}
+  #top-right{top:auto;bottom:calc(14px + var(--sb));right:12px;left:12px;justify-content:space-between}
+  #top-right .group:not(:last-child) .btn span{display:none}
+  #top-right .btn{height:36px}
+  #top-right .btn.icon{width:36px}
+  #zoom-label{min-width:44px}
+  #bottom{display:none}
+  #toast{bottom:calc(76px + var(--sb))}
+  #progress{top:auto;bottom:calc(76px + var(--sb));right:12px}
+  #lb-stage{padding:calc(60px + var(--st)) 8px 8px}
+  .lb-nav{display:none}
+  .item .del{width:30px;height:30px;line-height:30px;top:-14px;right:-14px;font-size:18px}
+  .item .rz{width:22px;height:22px;right:-11px;bottom:-11px}
+}
+@media (display-mode:standalone){ #bottom{display:none} }
+</style>
+</head>
+<body class="view">
+
+<div id="viewport"><div id="world"></div></div>
+<div id="marquee"></div>
+
+<div class="bar" id="top-left">
+  <span class="brand">Screenshot Canvas</span>
+  <span class="count" id="count"></span>
+</div>
+
+<div class="bar" id="top-right">
+  <div class="group">
+    <button class="btn icon" id="zoom-out" title="Zoom out (−)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3.5 8h9"/></svg></button>
+    <button class="btn" id="zoom-label" title="Reset to 100%">100%</button>
+    <button class="btn icon" id="zoom-in" title="Zoom in (+)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3.5 8h9M8 3.5v9"/></svg></button>
+    <button class="btn icon" id="fit" title="Fit all (0)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
+  </div>
+  <div class="group">
+    <button class="btn" id="mode" title="Toggle arrange mode (E)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.5v13M1.5 8h13M8 1.5 6 3.5M8 1.5l2 2M8 14.5l-2-2M8 14.5l2-2M1.5 8l2-2M1.5 8l2 2M14.5 8l-2-2M14.5 8l-2 2"/></svg><span>Arrange</span></button>
+    <button class="btn" id="tidy" title="Tidy into a grid"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="7" rx="1"/><rect x="9" y="2" width="5" height="4" rx="1"/><rect x="2" y="11" width="5" height="3" rx="1"/><rect x="9" y="8" width="5" height="6" rx="1"/></svg><span>Tidy</span></button>
+  </div>
+  <div class="group">
+    <button class="btn primary" id="upload"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M8 11V2.5M4.5 6 8 2.5 11.5 6M2.5 11v2.5h11V11"/></svg><span>Upload</span></button>
+  </div>
+</div>
+
+<div id="bottom">Drag to pan · Pinch or ⌘ + scroll to zoom · Drop or paste images to add · <b>E</b> to arrange</div>
+
+<div id="empty"><div class="card">
+  <h1>Your screenshots, all in one place</h1>
+  <p>Drop images anywhere, paste with ⌘V, or upload them. Then drag around to look through everything.</p>
+  <button class="btn primary" id="empty-upload" style="margin:0 auto">Upload screenshots</button>
+</div></div>
+<div id="drop">Drop to add to canvas</div>
+<div id="progress"></div>
+<div id="toast"><span id="toast-msg"></span><button id="toast-btn"></button></div>
+
+<div id="lightbox">
+  <div id="lb-top-left"></div>
+  <div id="lb-top">
+    <button class="btn" id="lb-locate" title="Show on canvas">Show on canvas</button>
+    <button class="btn" id="lb-delete" title="Delete">Delete</button>
+    <button class="btn icon" id="lb-close" title="Close (Esc)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m3.5 3.5 9 9M12.5 3.5l-9 9"/></svg></button>
+  </div>
+  <div id="lb-stage"><img id="lb-img" alt=""></div>
+  <button class="lb-nav" id="lb-prev" title="Previous (←)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 3 5 8l5 5"/></svg></button>
+  <button class="lb-nav" id="lb-next" title="Next (→)"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m6 3 5 5-5 5"/></svg></button>
+  <div id="lb-meta"></div>
+</div>
+
+<input type="file" id="file" accept="image/*" multiple hidden>
+
+<script>
+(() => {
+'use strict';
+
+/* =========================================================
+   Storage (IndexedDB): items = layout metadata, blobs = image data
+   ========================================================= */
+const DB_NAME = 'screenshot-canvas';
+let db;
+function openDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      d.createObjectStore('items', { keyPath: 'id' });
+      d.createObjectStore('blobs', { keyPath: 'id' });
+      d.createObjectStore('meta');
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function req(store, fn, mode = 'readonly') {
+  return new Promise((res, rej) => {
+    const r = fn(db.transaction(store, mode).objectStore(store));
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function write(stores, fn) {
+  return new Promise((res, rej) => {
+    const t = db.transaction(stores, 'readwrite');
+    fn(t);
+    t.oncomplete = () => res();
+    t.onerror = t.onabort = () => rej(t.error);
+  });
+}
+const META_FIELDS = ['id', 'x', 'y', 'w', 'h', 'z', 'nw', 'nh', 'tw', 'name', 'added'];
+const serialize = it => Object.fromEntries(META_FIELDS.map(k => [k, it[k]]));
+function saveItems(list) {
+  return write(['items'], t => { const s = t.objectStore('items'); list.forEach(it => s.put(serialize(it))); });
+}
+
+/* =========================================================
+   State
+   ========================================================= */
+const $ = id => document.getElementById(id);
+const viewport = $('viewport'), world = $('world');
+const items = new Map();
+const selected = new Set();
+const view = { x: 0, y: 0, s: 1 };
+let mode = 'view';
+let maxZ = 0;
+const MIN_S = 0.03, MAX_S = 6, BASE_W = 320, GAP = 28;
+
+/* =========================================================
+   View transform
+   ========================================================= */
+let rafPending = false;
+function applyView() {
+  world.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.s})`;
+  world.style.setProperty('--s', view.s);
+  $('zoom-label').textContent = Math.round(view.s * 100) + '%';
+  if (!rafPending) { rafPending = true; requestAnimationFrame(() => { rafPending = false; cull(); }); }
+  saveViewSoon();
+}
+let viewTimer;
+function saveViewSoon() {
+  clearTimeout(viewTimer);
+  viewTimer = setTimeout(() => db && req('meta', s => s.put({ ...view }, 'view'), 'readwrite').catch(() => {}), 400);
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+function zoomAt(sx, sy, factor) {
+  const ns = clamp(view.s * factor, MIN_S, MAX_S);
+  const wx = (sx - view.x) / view.s, wy = (sy - view.y) / view.s;
+  view.s = ns; view.x = sx - wx * ns; view.y = sy - wy * ns;
+  applyView();
+}
+const toWorld = (sx, sy) => ({ x: (sx - view.x) / view.s, y: (sy - view.y) / view.s });
+
+let tween;
+function animateView(target, ms = 450) {
+  cancelAnimationFrame(tween); stopInertia();
+  const from = { ...view }, t0 = performance.now();
+  const ease = t => 1 - Math.pow(1 - t, 3);
+  const step = now => {
+    const t = Math.min(1, (now - t0) / ms), e = ease(t);
+    // interpolate scale logarithmically so zooms feel even
+    const s = Math.exp(Math.log(from.s) + (Math.log(target.s) - Math.log(from.s)) * e);
+    // keep the world point at screen center moving linearly
+    const cx = innerWidth / 2, cy = innerHeight / 2;
+    const fc = { x: (cx - from.x) / from.s, y: (cy - from.y) / from.s };
+    const tc = { x: (cx - target.x) / target.s, y: (cy - target.y) / target.s };
+    const wx = fc.x + (tc.x - fc.x) * e, wy = fc.y + (tc.y - fc.y) * e;
+    view.s = s; view.x = cx - wx * s; view.y = cy - wy * s;
+    applyView();
+    if (t < 1) tween = requestAnimationFrame(step);
+  };
+  tween = requestAnimationFrame(step);
+}
+function bounds(list) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const it of list) { x0 = Math.min(x0, it.x); y0 = Math.min(y0, it.y); x1 = Math.max(x1, it.x + it.w); y1 = Math.max(y1, it.y + it.h); }
+  return list.length ? { x0, y0, x1, y1 } : null;
+}
+function viewFor(b, pad = 80, maxS = 1) {
+  const W = innerWidth, H = innerHeight;
+  const s = clamp(Math.min((W - pad * 2) / (b.x1 - b.x0), (H - pad * 2) / (b.y1 - b.y0)), MIN_S, maxS);
+  return { s, x: W / 2 - ((b.x0 + b.x1) / 2) * s, y: H / 2 - ((b.y0 + b.y1) / 2) * s };
+}
+function fitAll(animate = true) {
+  const b = bounds([...items.values()]);
+  if (!b) return;
+  const v = viewFor(b);
+  animate ? animateView(v) : (Object.assign(view, v), applyView());
+}
+
+/* =========================================================
+   Items: DOM + lazy image loading
+   ========================================================= */
+const urlCache = new Map(); // id -> {thumb, full}
+async function urlsFor(id) {
+  if (urlCache.has(id)) return urlCache.get(id);
+  const p = req('blobs', s => s.get(id)).then(rec => {
+    if (!rec) return { thumb: '', full: '' };
+    return { thumb: URL.createObjectURL(rec.thumb), full: URL.createObjectURL(rec.full) };
+  });
+  urlCache.set(id, p);
+  return p;
+}
+function revoke(id) {
+  const p = urlCache.get(id);
+  if (p) p.then(u => { URL.revokeObjectURL(u.thumb); URL.revokeObjectURL(u.full); });
+  urlCache.delete(id);
+}
+
+function makeEl(it) {
+  const el = document.createElement('div');
+  el.className = 'item';
+  el.dataset.id = it.id;
+  el.innerHTML = '<img alt="" draggable="false"><button class="del" title="Delete">×</button><div class="rz"></div>';
+  it.el = el; it.img = el.firstChild; it.res = 0; // 0 none, 1 thumb, 2 full
+  it.img.onload = () => it.img.classList.add('loaded');
+  position(it);
+  world.appendChild(el);
+}
+function position(it) {
+  const s = it.el.style;
+  s.transform = `translate(${it.x}px,${it.y}px)`;
+  s.width = it.w + 'px'; s.height = it.h + 'px'; s.zIndex = it.z;
+}
+
+function cull() {
+  const m = 0.6; // preload margin in viewport sizes
+  const W = innerWidth, H = innerHeight;
+  const a = toWorld(-W * m, -H * m), b = toWorld(W * (1 + m), H * (1 + m));
+  const dpr = devicePixelRatio || 1;
+  for (const it of items.values()) {
+    if (it.x > b.x || it.y > b.y || it.x + it.w < a.x || it.y + it.h < a.y) continue;
+    const wantFull = it.w * view.s * dpr > it.tw * 1.15 && it.nw > it.tw;
+    const want = wantFull ? 2 : 1;
+    if (it.res >= want) continue;
+    it.res = want;
+    urlsFor(it.id).then(u => { if (items.has(it.id) && it.res === want) it.img.src = want === 2 ? u.full : u.thumb; });
+  }
+}
+
+function updateCount() {
+  const n = items.size;
+  $('count').textContent = n ? `${n} screenshot${n === 1 ? '' : 's'}` : '';
+  $('empty').classList.toggle('show', n === 0);
+}
+
+/* =========================================================
+   Adding images
+   ========================================================= */
+function toBlob(canvas, type, q) { return new Promise(r => canvas.toBlob(r, type, q)); }
+async function makeThumb(file) {
+  const bmp = await createImageBitmap(file);
+  const nw = bmp.width, nh = bmp.height;
+  const k = Math.min(1, 1100 / nw, 2600 / nh);
+  const tw = Math.max(1, Math.round(nw * k)), th = Math.max(1, Math.round(nh * k));
+  const c = document.createElement('canvas'); c.width = tw; c.height = th;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bmp, 0, 0, tw, th);
+  bmp.close && bmp.close();
+  let thumb = await toBlob(c, 'image/webp', 0.88);
+  if (!thumb || thumb.type !== 'image/webp') thumb = await toBlob(c, 'image/jpeg', 0.9);
+  return { thumb, nw, nh, tw };
+}
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+// Masonry-pack a list of items into `cols` columns starting at (x0, y0)
+function masonry(list, cols, x0, y0, w = BASE_W) {
+  const heights = new Array(cols).fill(0);
+  for (const it of list) {
+    let c = 0; for (let i = 1; i < cols; i++) if (heights[i] < heights[c] - 1) c = i;
+    it.w = w; it.h = Math.round(w * it.nh / it.nw);
+    it.x = x0 + c * (w + GAP); it.y = y0 + heights[c];
+    heights[c] += it.h + GAP;
+  }
+}
+
+async function addFiles(fileList, dropPoint) {
+  const files = [...fileList].filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|avif|heic)$/i.test(f.name));
+  if (!files.length) return;
+  const prog = $('progress'); prog.classList.add('show');
+  const added = []; let failed = 0;
+  for (let i = 0; i < files.length; i++) {
+    prog.textContent = `Adding ${i + 1} of ${files.length}…`;
+    const f = files[i];
+    try {
+      const { thumb, nw, nh, tw } = await makeThumb(f);
+      const it = { id: uid(), nw, nh, tw, name: f.name || 'Pasted image', added: Date.now() - i, z: ++maxZ, x: 0, y: 0, w: 0, h: 0 };
+      await write(['blobs'], t => t.objectStore('blobs').put({ id: it.id, thumb, full: f }));
+      added.push(it);
+    } catch (e) { failed++; console.warn('Could not add', f.name, e); }
+  }
+  prog.classList.remove('show');
+  if (!added.length) { toast(`Couldn't read ${failed === 1 ? 'that file' : 'those files'}`); return; }
+
+  // Lay new images out as a block: at the drop point, or to the right of existing content
+  const cols = clamp(Math.ceil(Math.sqrt(added.length * 0.8)), 1, 8);
+  let x0, y0;
+  if (dropPoint) { x0 = dropPoint.x - BASE_W / 2; y0 = dropPoint.y - 100; }
+  else {
+    const b = bounds([...items.values()]);
+    if (b) { x0 = b.x1 + GAP * 3; y0 = b.y0; }
+    else { const c = toWorld(innerWidth / 2, innerHeight / 2); x0 = c.x - (cols * (BASE_W + GAP)) / 2; y0 = c.y - 200; }
+  }
+  masonry(added, cols, x0, y0);
+  for (const it of added) { items.set(it.id, it); makeEl(it); }
+  await saveItems(added);
+  updateCount();
+  if (!dropPoint) animateView(viewFor(bounds(added), 100));
+  else cull();
+  toast(`Added ${added.length} screenshot${added.length === 1 ? '' : 's'}` + (failed ? ` · ${failed} skipped` : ''));
+}
+
+/* =========================================================
+   Deleting (with undo)
+   ========================================================= */
+let undoStack = [];
+async function deleteItems(ids) {
+  ids = ids.filter(id => items.has(id));
+  if (!ids.length) return;
+  const batch = [];
+  for (const id of ids) {
+    const it = items.get(id);
+    const blob = await req('blobs', s => s.get(id));
+    batch.push({ meta: serialize(it), blob });
+    it.el.remove(); items.delete(id); selected.delete(id); revoke(id);
+  }
+  await write(['items', 'blobs'], t => ids.forEach(id => { t.objectStore('items').delete(id); t.objectStore('blobs').delete(id); }));
+  undoStack.push(batch); if (undoStack.length > 20) undoStack.shift();
+  updateCount(); syncSelection();
+  toast(`Deleted ${ids.length} screenshot${ids.length === 1 ? '' : 's'}`, 'Undo', undo);
+}
+async function undo() {
+  const batch = undoStack.pop();
+  if (!batch) return;
+  await write(['items', 'blobs'], t => batch.forEach(b => { t.objectStore('items').put(b.meta); if (b.blob) t.objectStore('blobs').put(b.blob); }));
+  for (const b of batch) { const it = { ...b.meta }; items.set(it.id, it); makeEl(it); }
+  updateCount(); cull();
+  toast(`Restored ${batch.length} screenshot${batch.length === 1 ? '' : 's'}`);
+}
+
+/* =========================================================
+   Selection
+   ========================================================= */
+function syncSelection() {
+  for (const it of items.values()) it.el.classList.toggle('selected', selected.has(it.id));
+}
+function select(ids, additive = false) {
+  if (!additive) selected.clear();
+  ids.forEach(id => selected.add(id));
+  syncSelection();
+}
+function bringToFront(list) {
+  list.sort((a, b) => a.z - b.z).forEach(it => { it.z = ++maxZ; it.el.style.zIndex = it.z; });
+}
+
+/* =========================================================
+   Tidy: masonry-arrange everything
+   ========================================================= */
+async function tidy() {
+  const list = [...items.values()];
+  if (!list.length) return;
+  // preserve rough spatial order: column-major by current position
+  list.sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  const totalH = list.reduce((s, it) => s + BASE_W * it.nh / it.nw + GAP, 0);
+  const aspect = innerWidth / innerHeight;
+  const cols = clamp(Math.round(Math.sqrt(totalH * aspect / (BASE_W + GAP))), 1, 60);
+  world.classList.add('animate');
+  masonry(list, cols, 0, 0);
+  list.forEach(position);
+  setTimeout(() => world.classList.remove('animate'), 600);
+  await saveItems(list);
+  animateView(viewFor(bounds(list)), 600);
+}
+
+/* =========================================================
+   Mode
+   ========================================================= */
+function setMode(m) {
+  mode = m;
+  document.body.classList.toggle('arrange', m === 'arrange');
+  document.body.classList.toggle('view', m === 'view');
+  $('mode').classList.toggle('on', m === 'arrange');
+  $('mode').querySelector('span').textContent = m === 'arrange' ? 'Done' : 'Arrange';
+  if (m === 'view') { selected.clear(); syncSelection(); }
+  try { localStorage.setItem('sc-mode', m); } catch {}
+}
+
+/* =========================================================
+   Pointer interaction
+   ========================================================= */
+const pointers = new Map();
+let gesture = null;       // current drag gesture
+let velocity = { x: 0, y: 0 }, inertiaRaf = 0, spaceDown = false;
+function stopInertia() { cancelAnimationFrame(inertiaRaf); inertiaRaf = 0; }
+
+viewport.addEventListener('pointerdown', e => {
+  if (e.button !== 0 && e.pointerType === 'mouse') {
+    if (e.button === 1) { e.preventDefault(); startPan(e, null); }
+    return;
+  }
+  stopInertia(); cancelAnimationFrame(tween);
+  viewport.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pointers.size === 2) { startPinch(); return; }
+  if (pointers.size > 2) return;
+
+  const el = e.target.closest('.item');
+  const it = el && items.get(el.dataset.id);
+
+  if (mode === 'arrange' && !spaceDown) {
+    if (e.target.classList.contains('del')) { gesture = { type: 'none' }; deleteItems(selected.has(it.id) ? [...selected] : [it.id]); return; }
+    if (e.target.classList.contains('rz')) {
+      gesture = { type: 'resize', it, sx: e.clientX, w: it.w };
+      return;
+    }
+    if (it) {
+      if (e.shiftKey || e.metaKey) {
+        if (selected.has(it.id)) { selected.delete(it.id); syncSelection(); gesture = { type: 'none' }; return; }
+        select([it.id], true);
+      } else if (!selected.has(it.id)) select([it.id]);
+      const moving = [...selected].map(id => items.get(id));
+      bringToFront(moving);
+      gesture = { type: 'move', sx: e.clientX, sy: e.clientY, moved: false, it,
+        orig: moving.map(m => ({ it: m, x: m.x, y: m.y })) };
+      return;
+    }
+    if (e.shiftKey) {
+      gesture = { type: 'marquee', sx: e.clientX, sy: e.clientY, base: new Set(selected) };
+      return;
+    }
+  }
+  startPan(e, it);
+});
+
+function startPan(e, it) {
+  gesture = { type: 'pan', lx: e.clientX, ly: e.clientY, sx: e.clientX, sy: e.clientY, it, moved: false, samples: [] };
+  viewport.classList.add('panning');
+}
+function startPinch() {
+  const [a, b] = [...pointers.values()];
+  gesture = { type: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+}
+
+viewport.addEventListener('pointermove', e => {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!gesture) return;
+  const g = gesture;
+  if (g.type === 'pinch') {
+    if (pointers.size < 2) return;
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    view.x += mx - g.mx; view.y += my - g.my;
+    zoomAt(mx, my, d / g.d);
+    g.d = d; g.mx = mx; g.my = my;
+  } else if (g.type === 'pan') {
+    const dx = e.clientX - g.lx, dy = e.clientY - g.ly;
+    g.lx = e.clientX; g.ly = e.clientY;
+    if (Math.hypot(e.clientX - g.sx, e.clientY - g.sy) > 4) g.moved = true;
+    view.x += dx; view.y += dy; applyView();
+    const now = performance.now();
+    g.samples.push({ t: now, x: e.clientX, y: e.clientY });
+    while (g.samples.length && now - g.samples[0].t > 90) g.samples.shift();
+  } else if (g.type === 'move') {
+    const dx = (e.clientX - g.sx) / view.s, dy = (e.clientY - g.sy) / view.s;
+    if (!g.moved && Math.hypot(e.clientX - g.sx, e.clientY - g.sy) < 3) return;
+    if (!g.moved) { g.moved = true; g.orig.forEach(o => o.it.el.classList.add('dragging')); }
+    for (const o of g.orig) { o.it.x = Math.round(o.x + dx); o.it.y = Math.round(o.y + dy); position(o.it); }
+  } else if (g.type === 'resize') {
+    const it = g.it;
+    it.w = Math.max(60, Math.round(g.w + (e.clientX - g.sx) / view.s));
+    it.h = Math.round(it.w * it.nh / it.nw);
+    position(it); cull();
+  } else if (g.type === 'marquee') {
+    const x0 = Math.min(g.sx, e.clientX), y0 = Math.min(g.sy, e.clientY);
+    const x1 = Math.max(g.sx, e.clientX), y1 = Math.max(g.sy, e.clientY);
+    const m = $('marquee').style;
+    m.display = 'block'; m.left = x0 + 'px'; m.top = y0 + 'px'; m.width = (x1 - x0) + 'px'; m.height = (y1 - y0) + 'px';
+    const a = toWorld(x0, y0), b = toWorld(x1, y1);
+    selected.clear(); g.base.forEach(id => selected.add(id));
+    for (const it of items.values())
+      if (it.x < b.x && it.x + it.w > a.x && it.y < b.y && it.y + it.h > a.y) selected.add(it.id);
+    syncSelection();
+  }
+});
+
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (!gesture) return;
+  const g = gesture;
+  if (g.type === 'pinch') { if (pointers.size === 0) gesture = null; else if (pointers.size === 1) gesture = { type: 'none' }; return; }
+  if (pointers.size > 0) return;
+  gesture = null;
+  viewport.classList.remove('panning');
+  if (g.type === 'pan') {
+    if (!g.moved) {
+      if (g.it && mode === 'view') openLightbox(g.it.id);
+      else if (mode === 'arrange') { selected.clear(); syncSelection(); }
+      return;
+    }
+    const s = g.samples;
+    if (s.length >= 2) {
+      const a = s[0], b = s[s.length - 1], dt = Math.max(16, b.t - a.t);
+      velocity = { x: (b.x - a.x) / dt * 16, y: (b.y - a.y) / dt * 16 };
+      if (performance.now() - b.t < 60) runInertia();
+    }
+  } else if (g.type === 'move') {
+    g.orig.forEach(o => o.it.el.classList.remove('dragging'));
+    if (g.moved) saveItems(g.orig.map(o => o.it));
+  } else if (g.type === 'resize') {
+    saveItems([g.it]);
+  } else if (g.type === 'marquee') {
+    $('marquee').style.display = 'none';
+  }
+}
+viewport.addEventListener('pointerup', endPointer);
+viewport.addEventListener('pointercancel', endPointer);
+viewport.addEventListener('dblclick', e => {
+  const el = e.target.closest('.item');
+  if (el && mode === 'arrange') openLightbox(el.dataset.id);
+});
+
+function runInertia() {
+  const step = () => {
+    velocity.x *= 0.94; velocity.y *= 0.94;
+    if (Math.abs(velocity.x) < 0.2 && Math.abs(velocity.y) < 0.2) { inertiaRaf = 0; return; }
+    view.x += velocity.x; view.y += velocity.y; applyView();
+    inertiaRaf = requestAnimationFrame(step);
+  };
+  inertiaRaf = requestAnimationFrame(step);
+}
+
+viewport.addEventListener('wheel', e => {
+  e.preventDefault();
+  stopInertia(); cancelAnimationFrame(tween);
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? innerHeight : 1;
+  if (e.ctrlKey || e.metaKey) {
+    zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * unit * (e.ctrlKey && !e.metaKey ? 0.01 : 0.0025)));
+  } else {
+    view.x -= e.deltaX * unit; view.y -= e.deltaY * unit; applyView();
+  }
+}, { passive: false });
+// Safari trackpad pinch
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault()));
+
+/* =========================================================
+   Lightbox
+   ========================================================= */
+let lbOrder = [], lbIndex = -1;
+function readingOrder() {
+  // column-major reading order, matching the masonry columns
+  return [...items.values()].sort((a, b) => (Math.round(a.x / 40) - Math.round(b.x / 40)) || (a.y - b.y)).map(it => it.id);
+}
+function openLightbox(id) {
+  lbOrder = readingOrder();
+  lbIndex = lbOrder.indexOf(id);
+  $('lightbox').classList.add('show');
+  showLb();
+}
+async function showLb() {
+  const id = lbOrder[lbIndex], it = items.get(id);
+  if (!it) return closeLightbox();
+  const img = $('lb-img');
+  const u = await urlsFor(id);
+  if (lbOrder[lbIndex] !== id) return;
+  img.src = u.full;
+  $('lb-top-left').textContent = `${lbIndex + 1} / ${lbOrder.length}`;
+  const date = new Date(it.added).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  $('lb-meta').innerHTML = '';
+  const name = document.createElement('b'); name.textContent = it.name;
+  const dims = document.createElement('span'); dims.textContent = `${it.nw} × ${it.nh}`;
+  const when = document.createElement('span'); when.textContent = `Added ${date}`;
+  $('lb-meta').append(name, dims, when);
+}
+function closeLightbox() { $('lightbox').classList.remove('show'); $('lb-img').removeAttribute('src'); lbIndex = -1; }
+function lbStep(d) { if (!lbOrder.length) return; lbIndex = (lbIndex + d + lbOrder.length) % lbOrder.length; showLb(); }
+$('lb-close').onclick = closeLightbox;
+$('lb-prev').onclick = () => lbStep(-1);
+$('lb-next').onclick = () => lbStep(1);
+$('lb-stage').addEventListener('click', e => { if (e.target.id === 'lb-stage') closeLightbox(); });
+// Swipe left/right to step, swipe down to close (touch)
+let lbSwipe = null;
+$('lb-stage').addEventListener('touchstart', e => {
+  if (e.touches.length === 1) lbSwipe = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+}, { passive: true });
+$('lb-stage').addEventListener('touchend', e => {
+  if (!lbSwipe) return;
+  const t = e.changedTouches[0], dx = t.clientX - lbSwipe.x, dy = t.clientY - lbSwipe.y;
+  lbSwipe = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) lbStep(dx < 0 ? 1 : -1);
+  else if (dy > 90 && Math.abs(dy) > Math.abs(dx)) closeLightbox();
+});
+$('lb-locate').onclick = () => {
+  const it = items.get(lbOrder[lbIndex]); closeLightbox();
+  if (it) animateView(viewFor(bounds([it]), 120, 2));
+};
+$('lb-delete').onclick = async () => {
+  const id = lbOrder[lbIndex];
+  await deleteItems([id]);
+  lbOrder.splice(lbIndex, 1);
+  if (!lbOrder.length) return closeLightbox();
+  lbIndex = lbIndex % lbOrder.length; showLb();
+};
+
+/* =========================================================
+   Toolbar, keyboard, drop, paste
+   ========================================================= */
+$('upload').onclick = $('empty-upload').onclick = () => $('file').click();
+$('file').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+$('zoom-in').onclick = () => zoomAt(innerWidth / 2, innerHeight / 2, 1.4);
+$('zoom-out').onclick = () => zoomAt(innerWidth / 2, innerHeight / 2, 1 / 1.4);
+$('zoom-label').onclick = () => {
+  const c = toWorld(innerWidth / 2, innerHeight / 2);
+  animateView({ s: 1, x: innerWidth / 2 - c.x, y: innerHeight / 2 - c.y });
+};
+$('fit').onclick = () => fitAll();
+$('mode').onclick = () => setMode(mode === 'arrange' ? 'view' : 'arrange');
+$('tidy').onclick = tidy;
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const lb = $('lightbox').classList.contains('show');
+  const mod = e.metaKey || e.ctrlKey;
+  if (lb) {
+    if (e.key === 'Escape') closeLightbox();
+    else if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); lbStep(1); }
+    else if (e.key === 'ArrowLeft') lbStep(-1);
+    else if (e.key === 'Delete' || e.key === 'Backspace') $('lb-delete').click();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+  if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); setMode('arrange'); select([...items.keys()]); return; }
+  if (mod) return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size) { e.preventDefault(); deleteItems([...selected]); }
+  else if (e.key === 'Escape') { selected.clear(); syncSelection(); }
+  else if (e.key === 'e' || e.key === 'E') setMode(mode === 'arrange' ? 'view' : 'arrange');
+  else if (e.key === '0') fitAll();
+  else if (e.key === '=' || e.key === '+') zoomAt(innerWidth / 2, innerHeight / 2, 1.4);
+  else if (e.key === '-') zoomAt(innerWidth / 2, innerHeight / 2, 1 / 1.4);
+  else if (e.key === ' ' && !spaceDown) { spaceDown = true; document.body.classList.add('space'); e.preventDefault(); }
+  else if (e.key.startsWith('Arrow')) {
+    const d = e.shiftKey ? 400 : 120;
+    animateView({ s: view.s, x: view.x + (e.key === 'ArrowLeft' ? d : e.key === 'ArrowRight' ? -d : 0),
+      y: view.y + (e.key === 'ArrowUp' ? d : e.key === 'ArrowDown' ? -d : 0) }, 200);
+  }
+});
+document.addEventListener('keyup', e => { if (e.key === ' ') { spaceDown = false; document.body.classList.remove('space'); } });
+
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+document.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $('drop').classList.add('show'); });
+document.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+document.addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--dragDepth <= 0) { dragDepth = 0; $('drop').classList.remove('show'); } });
+document.addEventListener('drop', e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $('drop').classList.remove('show');
+  addFiles(e.dataTransfer.files, items.size ? toWorld(e.clientX, e.clientY) : null);
+});
+document.addEventListener('paste', e => {
+  const files = [...(e.clipboardData?.items || [])].filter(i => i.kind === 'file' && i.type.startsWith('image/')).map(i => i.getAsFile());
+  if (files.length) { e.preventDefault(); addFiles(files); }
+});
+
+let toastTimer;
+function toast(msg, action, fn) {
+  $('toast-msg').textContent = msg;
+  const b = $('toast-btn'); b.textContent = action || ''; b.onclick = () => { fn && fn(); $('toast').classList.remove('show'); };
+  $('toast').classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').classList.remove('show'), action ? 6000 : 2400);
+}
+
+addEventListener('resize', () => cull());
+
+/* =========================================================
+   Boot
+   ========================================================= */
+(async () => {
+  try { setMode(localStorage.getItem('sc-mode') === 'arrange' ? 'arrange' : 'view'); } catch { setMode('view'); }
+  try { db = await openDB(); }
+  catch (e) { toast('Storage unavailable — images won\'t be saved'); console.error(e); }
+  const all = db ? await req('items', s => s.getAll()) : [];
+  for (const it of all) { items.set(it.id, it); maxZ = Math.max(maxZ, it.z || 0); makeEl(it); }
+  updateCount();
+  const saved = db && await req('meta', s => s.get('view')).catch(() => null);
+  if (saved && items.size) { Object.assign(view, saved); applyView(); }
+  else if (items.size) fitAll(false);
+  else { view.x = 0; view.y = 0; view.s = 1; applyView(); }
+
+  // Ask the browser not to evict our images when the phone is low on space
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
+
+  // Images shared into the app from the phone's share sheet (Android)
+  if (new URLSearchParams(location.search).has('shared')) {
+    history.replaceState(null, '', location.pathname);
+    const files = await takeInbox().catch(() => []);
+    if (files.length) addFiles(files);
+  }
+})();
+
+if (matchMedia('(pointer:coarse)').matches) {
+  $('empty').querySelector('p').textContent = 'Tap Upload to pick screenshots from your photos. Then drag around to look through everything — pinch to zoom.';
+}
+
+function takeInbox() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('sc-inbox', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('files', { autoIncrement: true });
+    r.onerror = () => rej(r.error);
+    r.onsuccess = () => {
+      const t = r.result.transaction('files', 'readwrite'), s = t.objectStore('files');
+      const g = s.getAll();
+      g.onsuccess = () => { s.clear(); };
+      t.oncomplete = () => res(g.result || []);
+      t.onerror = () => rej(t.error);
+    };
+  });
+}
+
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW', e)));
+}
+})();
+</script>
+</body>
+</html>
