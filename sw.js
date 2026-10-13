@@ -1,5 +1,5 @@
 // Offline cache for the app shell + Android "Share to Screenshots" inbox.
-const CACHE = 'screenshot-canvas-v1';
+const CACHE = 'screenshot-canvas-v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'];
 
